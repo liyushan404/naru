@@ -218,7 +218,6 @@ def SampleTupleThenRandom(all_cols,
         vals[6] = vals[6].to_datetime64()
 
     idxs = rng.choice(len(all_cols), replace=False, size=num_filters)
-    print('idxs', idxs[0])
     cols = np.take(all_cols, idxs)
 
     # If dom size >= 10, okay to place a range filter.
@@ -259,9 +258,7 @@ def Query(estimators,
           oracle_est=None):
     assert query is not None
     cols, ops, vals = query
-    print("cols are", cols)
-    print("ops are", ops)
-    print("vals are", vals)
+    print("query is", query)
 
     ### Actually estimate the query.
 
@@ -299,6 +296,9 @@ def Query_stats(estimators,
                 oracle_est=None):
     assert query is not None
     cols, ops, vals = query
+    print('cols are', cols)
+    print('ops are', ops)
+    print('vals are', vals)
     print("query is", query)
 
     def pprint(*args, **kwargs):
@@ -306,7 +306,7 @@ def Query_stats(estimators,
 
     pprint('Q(', end='')
     for c, o, v in zip(cols, ops, vals):
-        pprint('{} {} {}, '.format(c.name, o, float(v)), end='')
+        pprint('{} {} {}, '.format(c, o, float(v)), end='')
     pprint('): ', end='')
 
     pprint('\n  actual {} ({:.3f}%) '.format(card,
@@ -368,7 +368,7 @@ def RunN(table,
     return False
 
 
-def RunN_stats(all_table,
+def RunN_stats(table,
                cols,
                estimators,
                queries_file_name,
@@ -380,10 +380,9 @@ def RunN_stats(all_table,
         cardinality_true = int(query_str.split("||")[-1])
         query_str = query_str.split("||")[0][:-1]
         table_name = query_str.split(" ")[3]
-
-        table = all_table[table_name]
-
-        query = parse_query_single_table(query_str, table)
+        if table_name != table.name:
+            continue
+        query = parse_query_single_table(query_str, table, cols)
 
         begin_time = time.time()
         Query_stats(estimators,
@@ -396,10 +395,11 @@ def RunN_stats(all_table,
     return False
 
 
-def parse_query_single_table(query, table):
+def parse_query_single_table(query, table, all_cols):
     """
     将SQL语句转换为 cols, ops, vals
     """
+    attrs = []
     cols = []
     opss = []
     vals = []
@@ -408,15 +408,23 @@ def parse_query_single_table(query, table):
     if 'AND' not in useful:
         # 无查询条件
         if 'SELECT' in useful:
+            print('all_cols', all_cols)
             return cols, opss, vals
         else:
             attr, ops, value = str_pattern_matching(useful.strip())
             if "Date" in attr:
                 assert "::timestamp" in value
                 value = timestamp_transform(value.strip().split("::timestamp")[0])
-            cols.append(attr)
+            attr = attr.split('.')[-1]
+
             opss.append(ops)
             vals.append(value)
+
+            for _ in all_cols:
+                if _.name in attrs:
+                    cols.append(_)
+            cols = np.array(cols)
+            print('cols', cols)
             return cols, opss, vals
     else:
         for sub_query in useful.split(' AND '):
@@ -425,10 +433,16 @@ def parse_query_single_table(query, table):
             if "Date" in attr:
                 assert "::timestamp" in value
                 value = timestamp_transform(value.strip().split("::timestamp")[0])
-            cols.append(attr)
+            attr = attr.split('.')[-1]
+            attrs.append(attr)
             opss.append(ops)
             vals.append(value)
 
+    for _ in all_cols:
+        if _.name in attrs:
+            cols.append(_)
+    cols = np.array(cols)
+    print('cols', cols)
     return cols, opss, vals
 
 
@@ -667,63 +681,6 @@ def Main():
     # tables of STATS
     tables = ['badges', 'comments', 'postHistory', 'postLinks', 'posts', 'tags', 'users', 'votes']
 
-    if not args.run_bn:
-        # OK to load tables now
-        table, train_data, oracle_est = MakeTable()
-        cols_to_train = table.columns
-
-    Ckpt = collections.namedtuple(
-        'Ckpt', 'epoch model_bits bits_gap path loaded_model seed')
-    parsed_ckpts = []
-
-    for s in selected_ckpts:
-        if args.order is None:
-            z = re.match('.+model([\d\.]+)-data([\d\.]+).+seed([\d\.]+).*.pt',
-                         s)
-        else:
-            z = re.match(
-                '.+model([\d\.]+)-data([\d\.]+).+seed([\d\.]+)-order.*.pt', s)
-        assert z
-        model_bits = float(z.group(1))
-        data_bits = float(z.group(2))
-        seed = int(z.group(3))
-        bits_gap = model_bits - data_bits
-
-        order = None
-        if args.order is not None:
-            order = list(args.order)
-
-        if args.heads > 0:
-            model = MakeTransformer(cols_to_train=table.columns,
-                                    fixed_ordering=order,
-                                    seed=seed)
-        else:
-            if args.dataset in ['dmv-tiny', 'dmv']:
-                model = MakeMade(
-                    scale=args.fc_hiddens,
-                    cols_to_train=table.columns,
-                    seed=seed,
-                    fixed_ordering=order,
-                )
-            else:
-                assert False, args.dataset
-
-        assert order is None or len(order) == model.nin, order
-        ReportModel(model)
-        print('Loading ckpt:', s)
-        model.load_state_dict(torch.load(s))
-        model.eval()
-
-        print(s, bits_gap, seed)
-
-        # parsed_ckpts.append(
-        #     Ckpt(path=s,
-        #          epoch=None,
-        #          model_bits=model_bits,
-        #          bits_gap=bits_gap,
-        #          loaded_model=model,
-        #          seed=seed))
-
     # Estimators to run.
     if args.run_bn:
         estimators = RunNParallel(estimator_factory=MakeBnEstimators,
@@ -741,8 +698,8 @@ def Main():
             #                                    shortcircuit=args.column_masking)
             # for c in parsed_ckpts
         ]
-        for est, ckpt in zip(estimators, parsed_ckpts):
-            est.name = str(est) + '_{}_{:.3f}'.format(ckpt.seed, ckpt.bits_gap)
+        # for est, ckpt in zip(estimators, parsed_ckpts):
+        #     est.name = str(est) + '_{}_{:.3f}'.format(ckpt.seed, ckpt.bits_gap)
 
         if args.inference_opts:
             print('Tracing forward_with_encoded_input()...')
@@ -762,9 +719,9 @@ def Main():
         #     for p in SAMPLE_RATIO.get(args.dataset, [0.01]):
         #         estimators.append(estimators_lib.Sampling(table, p=p))
 
-        # table = MakeTableStats()
-        # cols_to_train = table.columns
-        # all_table = {}
+        table = MakeTableStats()
+        cols_to_train = table.columns
+        all_table = {}
         if args.run_maxdiff:
 
             # dmv
@@ -782,20 +739,20 @@ def Main():
         # Other estimators can be appended as well.
 
         if len(estimators):
-            RunN(table,
-                 cols_to_train,
-                 estimators,
-                 rng=np.random.RandomState(1234),
-                 num=args.num_queries,
-                 log_every=1,
-                 num_filters=None,
-                 oracle_cards=oracle_cards,
-                 oracle_est=oracle_est)
+            # RunN(table,
+            #      cols_to_train,
+            #      estimators,
+            #      rng=np.random.RandomState(1234),
+            #      num=args.num_queries,
+            #      log_every=1,
+            #      num_filters=None,
+            #      oracle_cards=oracle_cards,
+            #      oracle_est=oracle_est)
 
-            # RunN_stats(table,
-            #            cols_to_train,
-            #            estimators,
-            #            queries_file)
+            RunN_stats(table,
+                       cols_to_train,
+                       estimators,
+                       queries_file)
 
     SaveEstimators(args.err_csv, estimators)
     print('...Done, result:', args.err_csv)

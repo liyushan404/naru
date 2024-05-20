@@ -1071,6 +1071,8 @@ class MaxDiffHistogram(CardEst):
         # initial partition
         p = self.Partition()
         # populate initial boundary
+        print("len of table.columns", len(self.table.columns))
+        # print("if multiindex", self.table.data.head())
         for cid in range(len(self.table.columns)):
             if not self.table.columns[cid].data.dtype == 'int64':
                 p.boundaries.append(
@@ -1082,11 +1084,15 @@ class MaxDiffHistogram(CardEst):
         self.table_ds = common.TableDataset(self.table)
         num_rows = self.table.cardinality
         p.data_points = np.arange(num_rows)
+        print("p.boundaries", p.boundaries)
         for cid in range(len(p.boundaries)):
             if not self.table.columns[cid].data.dtype == 'int64':
                 p.col_value_list[cid] = self.table_ds.tuples_np[:, cid]
+                print('self.table.columns[cid].data', self.table_ds.tuples_np)
             else:
-                p.col_value_list[cid] = self.table.columns[cid].data[:, cid]
+                # print('self.table.columns[cid].data', self.table.columns[cid].data.tolist())
+                # p.col_value_list[cid] = self.table.columns[cid].data[:, cid]
+                p.col_value_list[cid] = self.table.columns[cid].data.tolist()
         p.rowid_to_position = list(np.arange(num_rows))
         self.partition_to_maxdiff[p] = set()
         self._compute_maxdiff(p)

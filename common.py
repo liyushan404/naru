@@ -190,6 +190,7 @@ class CsvTable(Table):
         if cols is not None:
             df = df[cols]
         print('done, took {:.1f}s'.format(time.time() - s))
+        print(df)
         return df
 
     def _build_columns(self, data, cols, type_casts, pg_cols):
@@ -230,7 +231,7 @@ class CsvTable(Table):
             # For datetime: np.datetime64('NaT')
             col.SetDistribution(data[c].value_counts(dropna=False).index.values)
             columns.append(col)
-        print('done, took {:.1f}s'.format(time.time() - s))
+        print('done building column, took {:.1f}s'.format(time.time() - s))
         return columns
 
 
